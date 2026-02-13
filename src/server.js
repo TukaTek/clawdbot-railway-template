@@ -345,27 +345,116 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>OpenClaw Setup</title>
   <style>
-    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; margin: 2rem; max-width: 900px; }
-    .card { border: 1px solid #ddd; border-radius: 12px; padding: 1.25rem; margin: 1rem 0; }
-    label { display:block; margin-top: 0.75rem; font-weight: 600; }
-    input, select { width: 100%; padding: 0.6rem; margin-top: 0.25rem; }
-    button { padding: 0.8rem 1.2rem; border-radius: 10px; border: 0; background: #111; color: #fff; font-weight: 700; cursor: pointer; }
-    code { background: #f6f6f6; padding: 0.1rem 0.3rem; border-radius: 6px; }
-    .muted { color: #555; }
+    @import url('https://fonts.googleapis.com/css2?family=Source+Sans+Pro:wght@300;400;600;700&display=swap');
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Futura PT', 'Futura', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      margin: 0;
+      padding: 2rem;
+      max-width: 900px;
+      margin: 0 auto;
+      background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 50%, #1a1a1a 100%);
+      color: #e2e8f0;
+      min-height: 100vh;
+    }
+    h1 { color: #FF6B35; font-size: 2rem; margin-bottom: 0.5rem; }
+    h2 { color: #FF8C42; font-size: 1.3rem; margin-bottom: 0.75rem; border-bottom: 2px solid #FF6B35; padding-bottom: 0.5rem; }
+    h3 { color: #FF8C42; }
+    .card {
+      border: 1px solid #3a3a3a;
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin: 1.25rem 0;
+      background: linear-gradient(145deg, #252525, #1e1e1e);
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    }
+    label { display: block; margin-top: 0.75rem; font-weight: 600; color: #d1d5db; }
+    input, select, textarea {
+      width: 100%;
+      padding: 0.7rem;
+      margin-top: 0.25rem;
+      border: 1px solid #4a4a4a;
+      border-radius: 8px;
+      background: #1a1a1a;
+      color: #e2e8f0;
+      font-family: inherit;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    input:focus, select:focus, textarea:focus {
+      outline: none;
+      border-color: #FF6B35;
+      box-shadow: 0 0 0 3px rgba(255, 107, 53, 0.2);
+    }
+    button {
+      padding: 0.8rem 1.2rem;
+      border-radius: 10px;
+      border: 0;
+      background: linear-gradient(135deg, #FF6B35 0%, #E85D2E 100%);
+      color: #fff;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 2px 10px rgba(255, 107, 53, 0.3);
+      transition: transform 0.1s, box-shadow 0.2s;
+    }
+    button:hover { transform: translateY(-1px); box-shadow: 0 4px 15px rgba(255, 107, 53, 0.4); }
+    button:active { transform: translateY(0); }
+    button[style*="background:#7c2d12"], button[style*="background: #7c2d12"] {
+      background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%) !important;
+    }
+    button[style*="background:#444"], button[style*="background: #444"] {
+      background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%) !important;
+    }
+    button[style*="background:#0f172a"], button[style*="background: #0f172a"] {
+      background: linear-gradient(135deg, #2d2d2d 0%, #1a1a1a 100%) !important;
+    }
+    button[style*="background:#1f2937"], button[style*="background: #1f2937"] {
+      background: linear-gradient(135deg, #1a1a1a 0%, #000000 100%) !important;
+    }
+    button[style*="background:#111"], button[style*="background: #111"] {
+      background: linear-gradient(135deg, #1a1a1a 0%, #000000 100%) !important;
+    }
+    code {
+      background: #2d2d2d;
+      padding: 0.15rem 0.4rem;
+      border-radius: 6px;
+      font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+      color: #FF8C42;
+      font-size: 0.9em;
+    }
+    .muted { color: #9ca3af; }
+    pre {
+      background: #111;
+      border: 1px solid #3a3a3a;
+      border-radius: 8px;
+      padding: 1rem;
+      margin-top: 0.5rem;
+      overflow-x: auto;
+      font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+      font-size: 0.85rem;
+      color: #e2e8f0;
+    }
+    a { color: #FF6B35; text-decoration: none; }
+    a:hover { color: #FF8C42; text-decoration: underline; }
+    details { margin-top: 0.75rem; }
+    summary { cursor: pointer; color: #FF8C42; font-weight: 600; }
+    details[open] summary { margin-bottom: 0.5rem; }
+    @media (max-width: 600px) {
+      body { padding: 1rem; }
+      .card { padding: 1rem; }
+    }
   </style>
 </head>
 <body>
-  <h1>OpenClaw Setup</h1>
+  <h1>\u{1F985} OpenClaw Setup</h1>
   <p class="muted">This wizard configures OpenClaw by running the same onboarding command it uses in the terminal, but from the browser.</p>
 
   <div class="card">
     <h2>Status</h2>
     <div id="status">Loading...</div>
     <div id="statusDetails" class="muted" style="margin-top:0.5rem"></div>
-    <div style="margin-top: 0.75rem">
-      <a href="/openclaw" target="_blank">Open OpenClaw UI</a>
-      &nbsp;|&nbsp;
-      <a href="/setup/export" target="_blank">Download backup (.tar.gz)</a>
+    <div style="margin-top: 1rem; display: flex; gap: 1rem; flex-wrap: wrap;">
+      <a href="/openclaw" target="_blank" style="padding: 0.5rem 1rem; background: linear-gradient(135deg, #FF6B35, #E85D2E); color: #fff; border-radius: 6px; border: none; font-weight: 700; box-shadow: 0 2px 8px rgba(255, 107, 53, 0.3); text-decoration: none;">\u{1F680} Open OpenClaw UI</a>
+      <a href="/setup/export" target="_blank" style="padding: 0.5rem 1rem; background: #1a1a1a; color: #FF6B35; border-radius: 6px; border: 1px solid #FF6B35; font-weight: 700; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); text-decoration: none;">\u{1F4BE} Download Backup</a>
     </div>
 
     <div style="margin-top: 0.75rem">
@@ -406,7 +495,7 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
     <h2>Config editor (advanced)</h2>
     <p class="muted">Edits the full config file on disk (JSON5). Saving creates a timestamped <code>.bak-*</code> backup and restarts the gateway.</p>
     <div class="muted" id="configPath"></div>
-    <textarea id="configText" style="width:100%; height: 260px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;"></textarea>
+    <textarea id="configText" style="width:100%; height: 260px; font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace; font-size: 0.9rem; background: #111; color: #e2e8f0; border: 1px solid #3a3a3a; border-radius: 8px; padding: 1rem;"></textarea>
     <div style="margin-top:0.5rem">
       <button id="configReload" style="background:#1f2937">Reload</button>
       <button id="configSave" style="background:#111; margin-left:0.5rem">Save</button>
@@ -511,14 +600,12 @@ app.get("/setup/api/status", requireSetupAuth, async (_req, res) => {
   // NOTE: On Railway, interactive OAuth flows are typically not viable. The UI will hide them by default.
   const authGroups = [
     { value: "openai", label: "OpenAI", hint: "Codex OAuth + API key", options: [
-      { value: "codex-cli", label: "OpenAI Codex OAuth (Codex CLI)" },
       { value: "openai-codex", label: "OpenAI Codex (ChatGPT OAuth)" },
       { value: "openai-api-key", label: "OpenAI API key" }
     ]},
-    { value: "anthropic", label: "Anthropic", hint: "Claude Code CLI + API key", options: [
-      { value: "claude-cli", label: "Anthropic token (Claude Code CLI)" },
-      { value: "token", label: "Anthropic token (paste setup-token)" },
-      { value: "apiKey", label: "Anthropic API key" }
+    { value: "anthropic", label: "Anthropic", hint: "API key or setup token", options: [
+      { value: "apiKey", label: "Anthropic API key (sk-ant-api03-...)" },
+      { value: "token", label: "Anthropic setup token (sk-ant-oat01-...)" }
     ]},
     { value: "google", label: "Google", hint: "Gemini API key + OAuth", options: [
       { value: "gemini-api-key", label: "Google Gemini API key" },
@@ -692,6 +779,12 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.remote.token", OPENCLAW_GATEWAY_TOKEN]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.bind", "loopback"]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.port", String(INTERNAL_GATEWAY_PORT)]));
+    // The wrapper reverse-proxies traffic to the gateway. Without trustedProxies the
+    // gateway sees the proxy's loopback address as an untrusted forwarding source and
+    // rejects x-forwarded-* headers. Without allowInsecureAuth the Control UI cannot
+    // use the shared gateway token for authentication (it requires device pairing instead).
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "--json", "gateway.trustedProxies", '["127.0.0.1","::1"]']));
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.controlUi.allowInsecureAuth", "true"]));
 
     // Optional: configure a custom OpenAI-compatible provider (base URL) for advanced users.
     if (payload.customProviderId?.trim() && payload.customProviderBaseUrl?.trim()) {
@@ -1209,6 +1302,51 @@ proxy.on("error", (err, _req, _res) => {
   console.error("[proxy]", err);
 });
 
+// Intercept /openclaw to inject auth token into localStorage before proxying.
+// When _authed=1 is present, skip this handler and let the proxy serve the real UI.
+app.get("/openclaw", async (req, res, next) => {
+  if (req.query._authed === "1") {
+    return next();
+  }
+
+  if (!isConfigured()) {
+    return res.redirect("/setup");
+  }
+
+  try {
+    await ensureGatewayRunning();
+  } catch (err) {
+    return res.status(503).type("text/plain").send(`Gateway not ready: ${String(err)}`);
+  }
+
+  // Serve an HTML page that sets the token in the Control UI's localStorage settings, then reloads
+  return res.type("html").send(`<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>OpenClaw Control</title>
+  <script>
+    // Inject the wrapper's gateway token into Control UI settings (key: openclaw.control.settings.v1)
+    const KEY = 'openclaw.control.settings.v1';
+    const TOKEN = '${OPENCLAW_GATEWAY_TOKEN}';
+    try {
+      const raw = localStorage.getItem(KEY);
+      const settings = raw ? JSON.parse(raw) : {};
+      settings.token = TOKEN;
+      localStorage.setItem(KEY, JSON.stringify(settings));
+    } catch {
+      localStorage.setItem(KEY, JSON.stringify({ token: TOKEN }));
+    }
+    // Redirect to the real Control UI (with _authed=1 to bypass this interceptor)
+    window.location.href = '/openclaw?_authed=1';
+  </script>
+</head>
+<body>
+  <p>Initializing OpenClaw Control...</p>
+</body>
+</html>`);
+});
+
 app.use(async (req, res) => {
   // If not configured, force users to /setup for any non-setup routes.
   if (!isConfigured() && !req.path.startsWith("/setup")) {
@@ -1268,6 +1406,17 @@ server.on("upgrade", async (req, socket, head) => {
     socket.destroy();
     return;
   }
+  // Remove any client-provided auth to prevent token mismatch, then inject wrapper's token.
+  // Also strip forwarding headers so the gateway sees the connection as local (from the
+  // wrapper proxy at 127.0.0.1), which enables auto-approved silent pairing.
+  delete req.headers["x-openclaw-token"];
+  delete req.headers["authorization"];
+  delete req.headers["x-forwarded-for"];
+  delete req.headers["x-forwarded-proto"];
+  delete req.headers["x-forwarded-host"];
+  delete req.headers["x-forwarded-port"];
+  req.headers["x-openclaw-token"] = OPENCLAW_GATEWAY_TOKEN;
+
   proxy.ws(req, socket, head, { target: GATEWAY_TARGET });
 });
 
