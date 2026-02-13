@@ -281,14 +281,14 @@ function requireSetupAuth(req, res, next) {
   const header = req.headers.authorization || "";
   const [scheme, encoded] = header.split(" ");
   if (scheme !== "Basic" || !encoded) {
-    res.set("WWW-Authenticate", 'Basic realm="OpenClaw Setup"');
+    res.set("WWW-Authenticate", 'Basic realm="CortexAI Assistant Setup"');
     return res.status(401).send("Auth required");
   }
   const decoded = Buffer.from(encoded, "base64").toString("utf8");
   const idx = decoded.indexOf(":");
   const password = idx >= 0 ? decoded.slice(idx + 1) : "";
   if (password !== SETUP_PASSWORD) {
-    res.set("WWW-Authenticate", 'Basic realm="OpenClaw Setup"');
+    res.set("WWW-Authenticate", 'Basic realm="CortexAI Assistant Setup"');
     return res.status(401).send("Invalid password");
   }
   return next();
@@ -343,7 +343,7 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>OpenClaw Setup</title>
+  <title>CortexAI Assistant Setup</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Source+Sans+Pro:wght@300;400;600;700&display=swap');
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -445,15 +445,15 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
   </style>
 </head>
 <body>
-  <h1>\u{1F985} OpenClaw Setup</h1>
-  <p class="muted">This wizard configures OpenClaw by running the same onboarding command it uses in the terminal, but from the browser.</p>
+  <h1>\u{1F9E0} CortexAI Assistant Setup</h1>
+  <p class="muted">This wizard configures your CortexAI Assistant instance from the browser — no terminal required.</p>
 
   <div class="card">
     <h2>Status</h2>
     <div id="status">Loading...</div>
     <div id="statusDetails" class="muted" style="margin-top:0.5rem"></div>
     <div style="margin-top: 1rem; display: flex; gap: 1rem; flex-wrap: wrap;">
-      <a href="/openclaw" target="_blank" style="padding: 0.5rem 1rem; background: linear-gradient(135deg, #FF6B35, #E85D2E); color: #fff; border-radius: 6px; border: none; font-weight: 700; box-shadow: 0 2px 8px rgba(255, 107, 53, 0.3); text-decoration: none;">\u{1F680} Open OpenClaw UI</a>
+      <a href="/openclaw" target="_blank" style="padding: 0.5rem 1rem; background: linear-gradient(135deg, #FF6B35, #E85D2E); color: #fff; border-radius: 6px; border: none; font-weight: 700; box-shadow: 0 2px 8px rgba(255, 107, 53, 0.3); text-decoration: none;">\u{1F680} Open CortexAI Assistant</a>
       <a href="/setup/export" target="_blank" style="padding: 0.5rem 1rem; background: #1a1a1a; color: #FF6B35; border-radius: 6px; border: 1px solid #FF6B35; font-weight: 700; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); text-decoration: none;">\u{1F4BE} Download Backup</a>
     </div>
 
@@ -525,7 +525,7 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
 
   <div class="card">
     <h2>2) Optional: Channels</h2>
-    <p class="muted">You can also add channels later inside OpenClaw, but this helps you get messaging working immediately.</p>
+    <p class="muted">You can also add channels later, but this helps you get messaging working immediately.</p>
 
     <label>Telegram bot token (optional)</label>
     <input id="telegramToken" type="password" placeholder="123456:ABC..." />
@@ -576,7 +576,7 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
     <button id="pairingApprove" style="background:#1f2937; margin-left:0.5rem">Approve pairing</button>
     <button id="reset" style="background:#444; margin-left:0.5rem">Reset setup</button>
     <pre id="log" style="white-space:pre-wrap"></pre>
-    <p class="muted">Reset deletes the OpenClaw config file so you can rerun onboarding. Pairing approval lets you grant DM access when dmPolicy=pairing.</p>
+    <p class="muted">Reset deletes the config file so you can rerun onboarding. Pairing approval lets you grant DM access when dmPolicy=pairing.</p>
 
     <details style="margin-top: 0.75rem">
       <summary><strong>Pairing helper</strong> (for “disconnected (1008): pairing required”)</summary>
@@ -827,7 +827,7 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
 
     if (payload.telegramToken?.trim()) {
       if (!supports("telegram")) {
-        extra += "\n[telegram] skipped (this openclaw build does not list telegram in `channels add --help`)\n";
+        extra += "\n[telegram] skipped (this build does not support telegram)\n";
       } else {
         // Avoid `channels add` here (it has proven flaky across builds); write config directly.
         const token = payload.telegramToken.trim();
@@ -850,7 +850,7 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
 
     if (payload.discordToken?.trim()) {
       if (!supports("discord")) {
-        extra += "\n[discord] skipped (this openclaw build does not list discord in `channels add --help`)\n";
+        extra += "\n[discord] skipped (this build does not support discord)\n";
       } else {
         const token = payload.discordToken.trim();
         const cfgObj = {
@@ -873,7 +873,7 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
 
     if (payload.slackBotToken?.trim() || payload.slackAppToken?.trim()) {
       if (!supports("slack")) {
-        extra += "\n[slack] skipped (this openclaw build does not list slack in `channels add --help`)\n";
+        extra += "\n[slack] skipped (this build does not support slack)\n";
       } else {
         const cfgObj = {
           enabled: true,
@@ -1159,7 +1159,7 @@ app.get("/setup/export", requireSetupAuth, async (_req, res) => {
   res.setHeader("content-type", "application/gzip");
   res.setHeader(
     "content-disposition",
-    `attachment; filename="openclaw-backup-${new Date().toISOString().replace(/[:.]/g, "-")}.tar.gz"`,
+    `attachment; filename="cortexai-backup-${new Date().toISOString().replace(/[:.]/g, "-")}.tar.gz"`,
   );
 
   // Prefer exporting from a common /data root so archives are easy to inspect and restore.
@@ -1324,7 +1324,7 @@ app.get("/openclaw", async (req, res, next) => {
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>OpenClaw Control</title>
+  <title>CortexAI Assistant</title>
   <script>
     // Inject the wrapper's gateway token into Control UI settings (key: openclaw.control.settings.v1)
     const KEY = 'openclaw.control.settings.v1';
@@ -1342,7 +1342,7 @@ app.get("/openclaw", async (req, res, next) => {
   </script>
 </head>
 <body>
-  <p>Initializing OpenClaw Control...</p>
+  <p>Initializing CortexAI Assistant...</p>
 </body>
 </html>`);
 });

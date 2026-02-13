@@ -122,7 +122,7 @@
 
       // If channels are unsupported, surface it for debugging.
       if (j.channelsAddHelp && j.channelsAddHelp.indexOf('telegram') === -1) {
-        logEl.textContent += '\nNote: this openclaw build does not list telegram in `channels add --help`. Telegram auto-add will be skipped.\n';
+        logEl.textContent += '\nNote: this build does not list telegram in `channels add --help`. Telegram auto-add will be skipped.\n';
       }
 
       // Attempt to load config editor content if present.
