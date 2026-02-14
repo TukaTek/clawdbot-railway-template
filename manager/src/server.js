@@ -21,6 +21,7 @@ import {
 } from "./railway-api.js";
 
 import * as store from "./store.js";
+import { slugify } from "./store.js";
 import {
   isTailscaleConfigured,
   getTailscaleToken,
@@ -31,7 +32,7 @@ import {
 
 const PORT = parseInt(process.env.PORT || "8080", 10);
 const FLEET_PASSWORD = process.env.FLEET_PASSWORD || "";
-const GITHUB_REPO = process.env.GITHUB_REPO || "TukaTek/clawdbot-railway-template";
+const GITHUB_REPO = process.env.GITHUB_REPO || "TukaTek/cortexai-assistant";
 
 if (!FLEET_PASSWORD) {
   console.warn("[fleet] WARNING: FLEET_PASSWORD not set — dashboard will reject all requests.");
@@ -180,44 +181,184 @@ async function getInstanceStatus(instance) {
   return statusData;
 }
 
-// --- API: List instances ---
+// Helper to enrich an instance with live status data.
+async function enrichInstance(inst) {
+  const live = await getInstanceStatus(inst).catch(() => ({
+    status: "unknown",
+  }));
+  return {
+    id: inst.id,
+    name: inst.name,
+    createdAt: inst.createdAt,
+    notes: inst.notes,
+    setupPassword: inst.config?.setupPassword,
+    domain: live.domain,
+    status: live.status,
+    deployment: live.deployment,
+    tailscale: inst.tailscale || null,
+  };
+}
 
-app.get("/api/instances", requireAuth, async (_req, res) => {
+// ============================================================
+//  TENANT API
+// ============================================================
+
+// --- List tenants ---
+
+app.get("/api/tenants", requireAuth, (_req, res) => {
   try {
-    const instances = store.getAllInstances();
-    // Enrich with live status (parallel, but don't fail if some error).
-    const enriched = await Promise.all(
-      instances.map(async (inst) => {
-        const live = await getInstanceStatus(inst).catch(() => ({
-          status: "unknown",
-        }));
-        return {
-          id: inst.id,
-          name: inst.name,
-          createdAt: inst.createdAt,
-          notes: inst.notes,
-          setupPassword: inst.config?.setupPassword,
-          domain: live.domain,
-          status: live.status,
-          deployment: live.deployment,
-          tailscale: inst.tailscale || null,
-        };
-      }),
-    );
+    res.json({ ok: true, tenants: store.getAllTenants() });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+// --- Create tenant ---
+
+app.post("/api/tenants", requireAuth, (req, res) => {
+  try {
+    const { name, notes } = req.body || {};
+    if (!name || typeof name !== "string" || name.trim().length === 0) {
+      return res.status(400).json({ ok: false, error: "Name is required." });
+    }
+
+    const cleanName = name.trim().replace(/[^a-zA-Z0-9 -]/g, "").slice(0, 50);
+    if (!cleanName) {
+      return res.status(400).json({ ok: false, error: "Name must contain alphanumeric characters." });
+    }
+
+    const slug = slugify(cleanName);
+
+    // Check for duplicate slug.
+    const existing = store.getAllTenants().find((t) => t.slug === slug);
+    if (existing) {
+      return res.status(409).json({ ok: false, error: `A tenant with slug "${slug}" already exists.` });
+    }
+
+    const tenant = store.addTenant({
+      id: crypto.randomUUID(),
+      name: cleanName,
+      slug,
+      createdAt: new Date().toISOString(),
+      notes: notes || "",
+      tailscale: null, // Pluggable — configured in a future phase.
+    });
+
+    console.log(`[fleet] Tenant created: "${cleanName}" (${tenant.id})`);
+    res.json({ ok: true, tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug } });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+// --- Get tenant detail ---
+
+app.get("/api/tenants/:tenantId", requireAuth, (req, res) => {
+  try {
+    const tenant = store.getTenant(req.params.tenantId);
+    if (!tenant) return res.status(404).json({ ok: false, error: "Tenant not found." });
+
+    res.json({
+      ok: true,
+      tenant: {
+        id: tenant.id,
+        name: tenant.name,
+        slug: tenant.slug,
+        createdAt: tenant.createdAt,
+        notes: tenant.notes,
+        tailscale: tenant.tailscale || null,
+        instanceCount: Object.keys(tenant.instances || {}).length,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+// --- Update tenant ---
+
+app.patch("/api/tenants/:tenantId", requireAuth, (req, res) => {
+  try {
+    const { name, notes } = req.body || {};
+    const patch = {};
+    if (name !== undefined) {
+      const cleanName = String(name).trim().replace(/[^a-zA-Z0-9 -]/g, "").slice(0, 50);
+      if (!cleanName) {
+        return res.status(400).json({ ok: false, error: "Name must contain alphanumeric characters." });
+      }
+      patch.name = cleanName;
+      patch.slug = slugify(cleanName);
+    }
+    if (notes !== undefined) patch.notes = notes;
+
+    const updated = store.updateTenant(req.params.tenantId, patch);
+    if (!updated) return res.status(404).json({ ok: false, error: "Tenant not found." });
+
+    res.json({ ok: true, tenant: { id: updated.id, name: updated.name, slug: updated.slug, notes: updated.notes } });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+// --- Delete tenant (cascades: deletes all Railway projects) ---
+
+app.delete("/api/tenants/:tenantId", requireAuth, async (req, res) => {
+  try {
+    const tenant = store.getTenant(req.params.tenantId);
+    if (!tenant) return res.status(404).json({ ok: false, error: "Tenant not found." });
+
+    const instances = Object.values(tenant.instances || {});
+    if (instances.length > 0) {
+      // Cascade delete all Railway projects.
+      const errors = [];
+      for (const inst of instances) {
+        try {
+          await railwayGql(PROJECT_DELETE, { id: inst.railway.projectId });
+          statusCache.delete(inst.id);
+        } catch (e) {
+          errors.push(`${inst.name}: ${String(e)}`);
+        }
+      }
+      if (errors.length > 0) {
+        console.warn(`[fleet] Tenant delete partial errors: ${errors.join("; ")}`);
+      }
+    }
+
+    store.removeTenant(tenant.id);
+    console.log(`[fleet] Tenant deleted: "${tenant.name}" (${tenant.id}), ${instances.length} instance(s) removed.`);
+
+    res.json({ ok: true, message: `Deleted tenant "${tenant.name}" and ${instances.length} instance(s).` });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+// ============================================================
+//  INSTANCE API (tenant-scoped)
+// ============================================================
+
+// --- List instances for a tenant ---
+
+app.get("/api/tenants/:tid/instances", requireAuth, async (req, res) => {
+  try {
+    const tenant = store.getTenant(req.params.tid);
+    if (!tenant) return res.status(404).json({ ok: false, error: "Tenant not found." });
+
+    const instances = store.getAllInstances(req.params.tid);
+    const enriched = await Promise.all(instances.map(enrichInstance));
     res.json({ ok: true, instances: enriched });
   } catch (err) {
     res.status(500).json({ ok: false, error: String(err) });
   }
 });
 
-// --- API: Get instance detail ---
+// --- Get instance detail ---
 
-app.get("/api/instances/:id", requireAuth, async (req, res) => {
+app.get("/api/tenants/:tid/instances/:id", requireAuth, async (req, res) => {
   try {
-    const instance = store.getInstance(req.params.id);
+    const instance = store.getInstance(req.params.tid, req.params.id);
     if (!instance) return res.status(404).json({ ok: false, error: "Not found" });
 
-    // Force fresh status.
     statusCache.delete(instance.id);
     const live = await getInstanceStatus(instance).catch(() => ({
       status: "unknown",
@@ -227,7 +368,7 @@ app.get("/api/instances/:id", requireAuth, async (req, res) => {
       ok: true,
       instance: {
         ...instance,
-        config: { setupPassword: instance.config?.setupPassword }, // Redact gateway token
+        config: { setupPassword: instance.config?.setupPassword },
         live,
       },
     });
@@ -236,21 +377,21 @@ app.get("/api/instances/:id", requireAuth, async (req, res) => {
   }
 });
 
-// --- API: Create instance ---
+// --- Create instance in a tenant ---
 
-app.post("/api/instances", requireAuth, async (req, res) => {
+app.post("/api/tenants/:tid/instances", requireAuth, async (req, res) => {
   try {
+    const tenant = store.getTenant(req.params.tid);
+    if (!tenant) return res.status(404).json({ ok: false, error: "Tenant not found." });
+
     const { name, setupPassword, notes } = req.body || {};
     if (!name || typeof name !== "string" || name.trim().length === 0) {
       return res.status(400).json({ ok: false, error: "Name is required." });
     }
 
-    // Sanitize name.
     const cleanName = name.trim().replace(/[^a-zA-Z0-9 -]/g, "").slice(0, 50);
     if (!cleanName) {
-      return res
-        .status(400)
-        .json({ ok: false, error: "Name must contain alphanumeric characters." });
+      return res.status(400).json({ ok: false, error: "Name must contain alphanumeric characters." });
     }
 
     const finalSetupPassword =
@@ -261,13 +402,16 @@ app.post("/api/instances", requireAuth, async (req, res) => {
     const log = [];
     function addLog(msg) {
       log.push(msg);
-      console.log(`[fleet] [${cleanName}] ${msg}`);
+      console.log(`[fleet] [${tenant.slug}/${cleanName}] ${msg}`);
     }
 
-    // Step 1: Create Railway project.
-    addLog("Creating Railway project...");
+    // Step 1: Create Railway project (named with tenant context).
+    const projectLabel = tenant.slug === "default"
+      ? `CortexAI - ${cleanName}`
+      : `CortexAI - ${tenant.slug} - ${cleanName}`;
+    addLog(`Creating Railway project "${projectLabel}"...`);
     const project = await railwayGql(PROJECT_CREATE, {
-      input: { name: `CortexAI - ${cleanName}` },
+      input: { name: projectLabel },
     });
     const projectId = project.projectCreate.id;
     addLog(`Project created: ${projectId}`);
@@ -279,7 +423,6 @@ app.post("/api/instances", requireAuth, async (req, res) => {
     addLog(`Environment: ${envEdge.node.name} (${environmentId})`);
 
     // Step 3: Create service from GitHub repo.
-    // Use a slugified instance name so the Railway domain reflects it.
     const serviceSlug = "cortexai-" + cleanName.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
     addLog(`Creating service "${serviceSlug}" from ${GITHUB_REPO}...`);
     const service = await railwayGql(SERVICE_CREATE, {
@@ -320,7 +463,8 @@ app.post("/api/instances", requireAuth, async (req, res) => {
     });
     addLog("Variables set.");
 
-    // Step 5b: Generate Tailscale auth key (if credentials are configured).
+    // Step 5b: Generate Tailscale auth key.
+    // Future: use tenant.tailscale credentials if present; for now, global.
     let tailscaleHostname = null;
     if (isTailscaleConfigured()) {
       try {
@@ -343,7 +487,7 @@ app.post("/api/instances", requireAuth, async (req, res) => {
       }
     }
 
-    // Step 6: Create a public domain so the instance is reachable.
+    // Step 6: Create a public domain.
     addLog("Creating public domain...");
     try {
       const domainResult = await railwayGql(SERVICE_DOMAIN_CREATE, {
@@ -359,8 +503,8 @@ app.post("/api/instances", requireAuth, async (req, res) => {
     await railwayGql(SERVICE_INSTANCE_DEPLOY, { serviceId, environmentId });
     addLog("Deployment triggered. Build will take several minutes.");
 
-    // Step 8: Save to store.
-    const instance = store.addInstance({
+    // Step 8: Save to store (tenant-scoped).
+    const instance = store.addInstance(req.params.tid, {
       id: instanceId,
       name: cleanName,
       createdAt: new Date().toISOString(),
@@ -388,11 +532,11 @@ app.post("/api/instances", requireAuth, async (req, res) => {
   }
 });
 
-// --- API: Restart instance ---
+// --- Restart instance ---
 
-app.post("/api/instances/:id/restart", requireAuth, async (req, res) => {
+app.post("/api/tenants/:tid/instances/:id/restart", requireAuth, async (req, res) => {
   try {
-    const instance = store.getInstance(req.params.id);
+    const instance = store.getInstance(req.params.tid, req.params.id);
     if (!instance) return res.status(404).json({ ok: false, error: "Not found" });
 
     await railwayGql(SERVICE_INSTANCE_REDEPLOY, {
@@ -407,11 +551,11 @@ app.post("/api/instances/:id/restart", requireAuth, async (req, res) => {
   }
 });
 
-// --- API: Redeploy instance ---
+// --- Redeploy instance ---
 
-app.post("/api/instances/:id/redeploy", requireAuth, async (req, res) => {
+app.post("/api/tenants/:tid/instances/:id/redeploy", requireAuth, async (req, res) => {
   try {
-    const instance = store.getInstance(req.params.id);
+    const instance = store.getInstance(req.params.tid, req.params.id);
     if (!instance) return res.status(404).json({ ok: false, error: "Not found" });
 
     await railwayGql(SERVICE_INSTANCE_REDEPLOY, {
@@ -426,17 +570,16 @@ app.post("/api/instances/:id/redeploy", requireAuth, async (req, res) => {
   }
 });
 
-// --- API: Delete instance ---
+// --- Delete instance ---
 
-app.delete("/api/instances/:id", requireAuth, async (req, res) => {
+app.delete("/api/tenants/:tid/instances/:id", requireAuth, async (req, res) => {
   try {
-    const instance = store.getInstance(req.params.id);
+    const instance = store.getInstance(req.params.tid, req.params.id);
     if (!instance) return res.status(404).json({ ok: false, error: "Not found" });
 
-    // Delete the Railway project (removes all services, volumes, deployments).
     await railwayGql(PROJECT_DELETE, { id: instance.railway.projectId });
 
-    store.removeInstance(instance.id);
+    store.removeInstance(req.params.tid, instance.id);
     statusCache.delete(instance.id);
 
     res.json({ ok: true, message: `Deleted project for "${instance.name}".` });
@@ -445,14 +588,13 @@ app.delete("/api/instances/:id", requireAuth, async (req, res) => {
   }
 });
 
-// --- API: Health probe for a specific instance ---
+// --- Health probe ---
 
-app.get("/api/instances/:id/health", requireAuth, async (req, res) => {
+app.get("/api/tenants/:tid/instances/:id/health", requireAuth, async (req, res) => {
   try {
-    const instance = store.getInstance(req.params.id);
+    const instance = store.getInstance(req.params.tid, req.params.id);
     if (!instance) return res.status(404).json({ ok: false, error: "Not found" });
 
-    // Get cached domain.
     const cached = statusCache.get(instance.id);
     const domain = cached?.data?.domain;
     if (!domain) {
@@ -473,12 +615,204 @@ app.get("/api/instances/:id/health", requireAuth, async (req, res) => {
   }
 });
 
+// ============================================================
+//  BACKWARD-COMPAT: /api/instances → Default tenant
+// ============================================================
+
+function resolveDefaultTenant(res) {
+  const def = store.getDefaultTenant();
+  if (!def) {
+    res.status(404).json({ ok: false, error: "No default tenant found." });
+    return null;
+  }
+  return def;
+}
+
+app.get("/api/instances", requireAuth, async (req, res) => {
+  const def = resolveDefaultTenant(res);
+  if (!def) return;
+  req.params.tid = def.id;
+  // Forward to tenant-scoped handler.
+  try {
+    const instances = store.getAllInstances(def.id);
+    const enriched = await Promise.all(instances.map(enrichInstance));
+    res.json({ ok: true, instances: enriched });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+app.get("/api/instances/:id", requireAuth, async (req, res) => {
+  const found = store.findInstanceAcrossTenants(req.params.id);
+  if (!found) return res.status(404).json({ ok: false, error: "Not found" });
+
+  statusCache.delete(found.instance.id);
+  const live = await getInstanceStatus(found.instance).catch(() => ({
+    status: "unknown",
+  }));
+  res.json({
+    ok: true,
+    instance: {
+      ...found.instance,
+      config: { setupPassword: found.instance.config?.setupPassword },
+      live,
+    },
+  });
+});
+
+app.post("/api/instances", requireAuth, async (req, res) => {
+  const def = resolveDefaultTenant(res);
+  if (!def) return;
+  // Inject tenant ID and forward.
+  req.params.tid = def.id;
+  // Re-dispatch by calling the handler directly isn't clean, so inline:
+  try {
+    const { name, setupPassword, notes } = req.body || {};
+    if (!name || typeof name !== "string" || name.trim().length === 0) {
+      return res.status(400).json({ ok: false, error: "Name is required." });
+    }
+    // Redirect client to use the tenant-scoped endpoint.
+    // For now, create in default tenant inline.
+    const cleanName = name.trim().replace(/[^a-zA-Z0-9 -]/g, "").slice(0, 50);
+    if (!cleanName) {
+      return res.status(400).json({ ok: false, error: "Name must contain alphanumeric characters." });
+    }
+
+    const finalSetupPassword = setupPassword || crypto.randomBytes(16).toString("hex");
+    const gatewayToken = crypto.randomBytes(32).toString("hex");
+    const instanceId = crypto.randomUUID();
+    const log = [];
+    function addLog(msg) { log.push(msg); console.log(`[fleet] [${cleanName}] ${msg}`); }
+
+    addLog("Creating Railway project...");
+    const project = await railwayGql(PROJECT_CREATE, { input: { name: `CortexAI - ${cleanName}` } });
+    const projectId = project.projectCreate.id;
+    addLog(`Project created: ${projectId}`);
+
+    const envEdge = project.projectCreate.environments?.edges?.[0];
+    if (!envEdge) throw new Error("No default environment found in new project.");
+    const environmentId = envEdge.node.id;
+    addLog(`Environment: ${envEdge.node.name} (${environmentId})`);
+
+    const serviceSlug = "cortexai-" + cleanName.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+    addLog(`Creating service "${serviceSlug}" from ${GITHUB_REPO}...`);
+    const service = await railwayGql(SERVICE_CREATE, { input: { projectId, name: serviceSlug, source: { repo: GITHUB_REPO } } });
+    const serviceId = service.serviceCreate.id;
+    addLog(`Service created: ${serviceId}`);
+
+    addLog("Creating volume at /data...");
+    const volume = await railwayGql(VOLUME_CREATE, { input: { projectId, serviceId, environmentId, mountPath: "/data" } });
+    const volumeId = volume.volumeCreate.id;
+    addLog(`Volume created: ${volumeId}`);
+
+    addLog("Setting environment variables...");
+    await railwayGql(VARIABLE_COLLECTION_UPSERT, {
+      input: { projectId, environmentId, serviceId, variables: {
+        SETUP_PASSWORD: finalSetupPassword, OPENCLAW_STATE_DIR: "/data/.openclaw",
+        OPENCLAW_WORKSPACE_DIR: "/data/workspace", OPENCLAW_GATEWAY_TOKEN: gatewayToken,
+        PORT: "8080", OPENCLAW_PUBLIC_PORT: "8080",
+      }, replace: false },
+    });
+    addLog("Variables set.");
+
+    let tailscaleHostname = null;
+    if (isTailscaleConfigured()) {
+      try {
+        addLog("Generating Tailscale auth key...");
+        const tsToken = await getTailscaleToken();
+        const tsKey = await createAuthKey(tsToken, serviceSlug);
+        await railwayGql(VARIABLE_COLLECTION_UPSERT, {
+          input: { projectId, environmentId, serviceId, variables: { TS_AUTHKEY: tsKey.key, TS_HOSTNAME: serviceSlug }, replace: false },
+        });
+        tailscaleHostname = serviceSlug;
+        addLog(`Tailscale key created. Device will join as "${serviceSlug}".`);
+      } catch (e) { addLog(`Tailscale setup skipped: ${String(e)}`); }
+    }
+
+    addLog("Creating public domain...");
+    try {
+      const domainResult = await railwayGql(SERVICE_DOMAIN_CREATE, { input: { serviceId, environmentId } });
+      addLog(`Domain: ${domainResult.serviceDomainCreate?.domain || "(pending)"}`);
+    } catch (e) { addLog(`Domain creation note: ${String(e)}`); }
+
+    addLog("Triggering deployment...");
+    await railwayGql(SERVICE_INSTANCE_DEPLOY, { serviceId, environmentId });
+    addLog("Deployment triggered. Build will take several minutes.");
+
+    store.addInstance(def.id, {
+      id: instanceId, name: cleanName, createdAt: new Date().toISOString(),
+      railway: { projectId, serviceId, environmentId, volumeId },
+      config: { setupPassword: finalSetupPassword, gatewayToken },
+      tailscale: tailscaleHostname ? { hostname: tailscaleHostname } : null,
+      notes: notes || "",
+    });
+    addLog("Instance saved to fleet store.");
+
+    res.json({ ok: true, instance: { id: instanceId, name: cleanName, setupPassword: finalSetupPassword, railway: { projectId, serviceId, environmentId } }, log });
+  } catch (err) {
+    console.error("[fleet] create error:", err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+app.post("/api/instances/:id/restart", requireAuth, async (req, res) => {
+  const found = store.findInstanceAcrossTenants(req.params.id);
+  if (!found) return res.status(404).json({ ok: false, error: "Not found" });
+  try {
+    await railwayGql(SERVICE_INSTANCE_REDEPLOY, {
+      serviceId: found.instance.railway.serviceId,
+      environmentId: found.instance.railway.environmentId,
+    });
+    statusCache.delete(found.instance.id);
+    res.json({ ok: true, message: "Redeployment triggered." });
+  } catch (err) { res.status(500).json({ ok: false, error: String(err) }); }
+});
+
+app.post("/api/instances/:id/redeploy", requireAuth, async (req, res) => {
+  const found = store.findInstanceAcrossTenants(req.params.id);
+  if (!found) return res.status(404).json({ ok: false, error: "Not found" });
+  try {
+    await railwayGql(SERVICE_INSTANCE_REDEPLOY, {
+      serviceId: found.instance.railway.serviceId,
+      environmentId: found.instance.railway.environmentId,
+    });
+    statusCache.delete(found.instance.id);
+    res.json({ ok: true, message: "Redeployment triggered." });
+  } catch (err) { res.status(500).json({ ok: false, error: String(err) }); }
+});
+
+app.delete("/api/instances/:id", requireAuth, async (req, res) => {
+  const found = store.findInstanceAcrossTenants(req.params.id);
+  if (!found) return res.status(404).json({ ok: false, error: "Not found" });
+  try {
+    await railwayGql(PROJECT_DELETE, { id: found.instance.railway.projectId });
+    store.removeInstance(found.tenant.id, found.instance.id);
+    statusCache.delete(found.instance.id);
+    res.json({ ok: true, message: `Deleted project for "${found.instance.name}".` });
+  } catch (err) { res.status(500).json({ ok: false, error: String(err) }); }
+});
+
+app.get("/api/instances/:id/health", requireAuth, async (req, res) => {
+  const found = store.findInstanceAcrossTenants(req.params.id);
+  if (!found) return res.status(404).json({ ok: false, error: "Not found" });
+  try {
+    const cached = statusCache.get(found.instance.id);
+    const domain = cached?.data?.domain;
+    if (!domain) return res.json({ ok: false, error: "Domain not yet available." });
+    const hRes = await fetch(`https://${domain}/healthz`, { signal: AbortSignal.timeout(5000) });
+    if (hRes.ok) { res.json({ ok: true, health: await hRes.json() }); }
+    else { res.json({ ok: false, status: hRes.status }); }
+  } catch (err) { res.json({ ok: false, error: String(err) }); }
+});
+
 // --- Start server ---
 
 app.listen(PORT, "0.0.0.0", () => {
+  const tenants = store.getAllTenants();
+  const totalInstances = tenants.reduce((sum, t) => sum + t.instanceCount, 0);
   console.log(`[fleet] CortexAI Fleet Manager listening on :${PORT}`);
   console.log(`[fleet] GitHub repo: ${GITHUB_REPO}`);
-  console.log(`[fleet] Instances stored: ${store.getAllInstances().length}`);
+  console.log(`[fleet] Tenants: ${tenants.length}, Instances: ${totalInstances}`);
 });
 
 // --- Dashboard HTML ---
@@ -537,7 +871,15 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     .status-failed { background: #f87171; }
     .status-unhealthy { background: #fb923c; }
     .status-stopped, .status-unknown, .status-no-deployment { background: #6b7280; }
-    .instance-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; }
+    .tenant-grid, .instance-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; }
+    .tenant-card {
+      background: #141414; border: 1px solid #2a2a2a; border-radius: 12px;
+      padding: 1.25rem; cursor: pointer;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      transition: border-color 0.2s;
+    }
+    .tenant-card:hover { border-color: #FF6B35; }
+    .tenant-card h3 { margin: 0 0 0.5rem 0; color: #FF6B35; font-size: 1.1rem; }
     .instance-card {
       background: #141414; border: 1px solid #2a2a2a; border-radius: 12px;
       padding: 1.25rem;
@@ -546,9 +888,14 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     .instance-card h3 { margin: 0 0 0.5rem 0; color: #e2e8f0; font-size: 1rem; }
     .instance-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.75rem; }
     .instance-actions button { font-size: 0.8rem; padding: 0.35rem 0.75rem; }
+    .breadcrumb { margin-bottom: 1rem; font-size: 0.95rem; }
+    .breadcrumb a { color: #FF6B35; text-decoration: none; cursor: pointer; }
+    .breadcrumb a:hover { text-decoration: underline; }
+    .breadcrumb .sep { color: #94a3b8; margin: 0 0.5rem; }
+    .instance-count { color: #4ade80; font-weight: 600; }
     @media (max-width: 600px) {
       body { padding: 1rem; }
-      .instance-grid { grid-template-columns: 1fr; }
+      .tenant-grid, .instance-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -556,9 +903,30 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <h1>CortexAI Fleet Manager</h1>
   <p class="muted">Create and manage CortexAI Assistant instances on Railway.</p>
 
+  <!-- Breadcrumb navigation -->
+  <div class="breadcrumb" id="breadcrumb">
+    <a id="breadcrumbRoot" onclick="fleetActions.showTenants()">All Tenants</a>
+    <span class="sep" id="breadcrumbSep" style="display:none">/</span>
+    <span id="breadcrumbTenant" style="display:none"></span>
+  </div>
+
+  <!-- Toolbar -->
   <div style="margin-bottom: 1rem; display: flex; gap: 0.5rem;">
-    <button class="btn-primary" id="showCreate">New Instance</button>
+    <button class="btn-primary" id="showCreate">New Tenant</button>
     <button class="btn-secondary" id="refreshAll">Refresh</button>
+  </div>
+
+  <!-- Create tenant form (hidden by default) -->
+  <div class="card" id="createTenantPanel" style="display:none">
+    <h2>Create New Tenant</h2>
+    <label>Tenant name (client name)</label>
+    <input id="createTenantName" placeholder="e.g. Client XYZ" maxlength="50" />
+    <label>Notes (optional)</label>
+    <input id="createTenantNotes" placeholder="Internal notes about this client" />
+    <div style="margin-top: 0.5rem; display: flex; gap: 0.5rem;">
+      <button class="btn-primary" id="createTenantRun">Create Tenant</button>
+      <button class="btn-muted" id="createTenantCancel">Cancel</button>
+    </div>
   </div>
 
   <!-- Create instance form (hidden by default) -->
@@ -577,8 +945,13 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     <pre id="createLog" style="display:none"></pre>
   </div>
 
-  <!-- Instances list -->
-  <div id="instancesList">
+  <!-- Tenants list (shown on tenant view) -->
+  <div id="tenantsList">
+    <p class="muted">Loading tenants...</p>
+  </div>
+
+  <!-- Instances list (shown on instance view, hidden by default) -->
+  <div id="instancesList" style="display:none">
     <p class="muted">Loading instances...</p>
   </div>
 
